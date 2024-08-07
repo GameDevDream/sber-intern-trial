@@ -2,7 +2,9 @@ FROM ubuntu:22.04
 #FROM chooses the base image used to build the new
 LABEL Name=trial-assignment-sberbank Version=0.0.2
 #LABEL is metadata that can be accessed when using docker inspect
-VOLUME [ "usr/local/src/repo", "usr/local/bin/" ]
+ARG REPO=/usr/local/src/repo BINARIES=/usr/local/bin/
+#ARG creates a build-time environment variables
+VOLUME [ ${REPO}, ${BINARIES} ]
 #VOLUME mounts anonymous directory somewhere inside docker to the
 #image's filesystem paths. This will be used to technically pass
 #the requirement, that container should use git, and compile
@@ -23,16 +25,29 @@ RUN apt-get -y install cmake
 #Docker caches the results of theese lines so they run only once,
 #unless explicitly told not to with --no-cache flag
 
-COPY scripts/entrypoint-script.sh /usr/bin
+ARG SCRIPTS=/usr/bin
+COPY scripts/. ${SCRIPTS}
 #COPY creates a copy of files in root filesystem inside the image's
-RUN ["chmod", "a=rwx", "/usr/bin/entrypoint-script.sh"]
-#Change priviligies to make entrypoint-script executable
+RUN chmod a=rwx ${SCRIPTS}/entrypoint-script.sh
+RUN chmod a=rwx ${SCRIPTS}/cmd-script.sh
+#Change priviligies to make scripts executable
+
+#======================================================================
+#IMPORTANT NOTE 1:
+#   ENTRYPOINT and CMD use run-time environment, so they cannot access
+#   build-time variables created with ARG
+#IMPORTANT NOTE 2:
+#   ENTRYPOINT does not allow usage of environment variables while in
+#   exec form - only in shell. But shell form does not allow to pass
+#   CMD to ENTRYPOINT. So everything sucks, we cannot win anyways,
+#   hence there is no bad solutions. My solution is to manually rewrite
+#   ENTRYPOINT path to ${SCRIPTS} anytime I change it. Sucks...
+#======================================================================
+ENV REPO=${REPO} BINARIES=${BINARIES} SCRIPTS=${SCRIPTS}
+#ENV creates environment variables, visible in runtime
 ENTRYPOINT [ "/usr/bin/entrypoint-script.sh" ]
 #ENTRYPOINT executes given command upon each run of the container
 #entrypoint can be changed with --entrypoint command
-
-COPY scripts/cmd-script.sh /usr/bin
-RUN ["chmod", "a=rwx", "/usr/bin/cmd-script.sh"]
 CMD [ "/usr/bin/cmd-script.sh" ]
 #CMD acts like an entrypoint if there is none. Otherwise it passes
 #given parameters as a parameters to ENTRYPOINT
