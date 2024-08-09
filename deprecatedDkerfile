@@ -1,0 +1,153 @@
+# Next block of code is copied and slightly modified from
+#onnxruntime oficial repository. The path to original:
+#/dockerfiles/Dockerfile.cuda
+
+# Building was intended this way:
+#Open /dockerfiles
+#From bash enter "docker build -t onnxruntime-cuda -f Dockerfile.cuda .."
+#MIND THE .. It means that the builder actually invoked in root
+
+# Running was intended this way:
+#docker run --gpus all -it onnxruntime-cuda
+
+# ================== COPIED AND CUSTOMIZED =====================
+# --------------------------------------------------------------
+# Copyright (c) Microsoft Corporation. All rights reserved.
+# Licensed under the MIT License.
+# --------------------------------------------------------------
+# Dockerfile to run ONNXRuntime with CUDA, CUDNN integration
+
+# nVidia cuda 11.4 Base Image
+FROM nvcr.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+ENV	    DEBIAN_FRONTEND=noninteractive
+# DEBIAN_FRONTEND is the interface provider for apt.
+#when set to noninteractive it chooses default answers to
+#any interaction or confirmation. So, basically, it silences apt.
+#MAINTAINER Changming Sun "chasun@microsoft.com"
+# Deprecated and unnecessery. Left out of gratitude
+#ADD . /code
+COPY . /code
+# Not the use case of ADD according to Docker docs
+
+ENV PATH /usr/local/nvidia/bin:/usr/local/cuda/bin:${PATH}
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-dev \
+        ca-certificates \
+        g++ \
+        python3-numpy \
+        gcc \
+        make \
+        git \
+        python3-setuptools \
+        python3-wheel \
+        python3-packaging \
+        python3-pip \
+        aria2 \
+    && aria2c -q -d /tmp -o cmake-3.27.3-linux-x86_64.tar.gz https://github.com/Kitware/CMake/releases/download/v3.27.3/cmake-3.27.3-linux-x86_64.tar.gz \
+    && tar -zxf /tmp/cmake-3.27.3-linux-x86_64.tar.gz --strip=1 -C /usr
+# I would remove some things, but this stage of build uses the bash script that invokes
+#python program that consists of many-many-MANY lines so better leave it alone.
+# aria2c downloads CMake then tar unpacks it. This way it is guaranteed to have this specific
+#CMake version. I wouldn't risk replacing it due to the abovementiod issue
+
+RUN cd /code && \
+    python3 -m pip install -r tools/ci_build/github/linux/docker/inference/x86_64/python/cpu/scripts/requirements.txt && \
+    /bin/bash ./build.sh \
+        --allow_running_as_root \
+        --skip_submodule_sync \
+        --cuda_home /usr/local/cuda \
+        --cudnn_home /usr/lib/x86_64-linux-gnu/ \
+        --use_cuda \
+        --config Release \
+        --build_wheel \
+        --update \
+        --build \
+        --parallel \
+        --cmake_extra_defines ONNXRUNTIME_VERSION=$(cat ./VERSION_NUMBER) 'CMAKE_CUDA_ARCHITECTURES=52;60;61;70;75;86'
+# Here you can see that RUN does not install everything straightforward. Instead
+#it invokes ./build.sh, which in turn will invoke tools/ci_build/build.py which consists of...
+#3000 LINES. Hence I do not touch anything
+
+FROM nvcr.io/nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+#Multistage build, stage 2
+ENV	    DEBIAN_FRONTEND=noninteractive
+COPY --from=0 /code/build/Linux/Release/dist /root
+# --from specifies the environment. 0 is the name for the first
+#stage of multistaged builds by default.
+COPY --from=0 /code/dockerfiles/LICENSE-IMAGE.txt /code/LICENSE-IMAGE.txt
+# Left this because maybe this files are lisence agreements for use
+#and I'm no lawyer to know the consequences of removing them :/
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libstdc++6 \
+        ca-certificates \
+        python3-setuptools \
+        python3-wheel \
+        python3-pip \
+        unattended-upgrades && \
+    unattended-upgrade && \
+    python3 -m pip install /root/*.whl && \
+    rm -rf /root/*.whl
+# Left the python part because I'm not going to test this
+#deprecated file anyway.
+# TEST REMOVAL OF PYTHON PACKAGES BEFORE COMMITING THEM TO ACTUAL
+#DOCKERFILE!!!
+# ======================= END OF COPY ==========================
+
+#FROM ubuntu:22.04
+# FROM chooses the base image used to build the new
+#This would destroy all the progress in the multistage build,
+#hence why I commented it. ubuntu:22.04 IS the base image for
+#cudann
+LABEL Name=trial-assignment-sberbank Version=0.0.2
+#LABEL is metadata that can be accessed when using docker inspect
+ARG REPO=/usr/local/src/repo BINARIES=/usr/local/bin/
+#ARG creates a build-time environment variables
+VOLUME [ ${REPO}, ${BINARIES} ]
+#VOLUME mounts anonymous directory somewhere inside docker to the
+#image's filesystem paths. This will be used to technically pass
+#the requirement, that container should use git, and compile
+#but will guarantee that it happens only once after the first run
+COPY repo/test/hello-world.cpp /usr/src
+#THIS LINE SHOULD BE REMOVED IN THE FINAL VERSION!
+
+RUN apt-get update
+#RUN is a directive to builder. It executes provided command
+#inside the UNIX-like system of Docker. In this case, it
+#updates apt-get function provided with ubuntu:22.04
+RUN apt-get -y install git
+#here it installs git
+RUN apt-get -y install g++
+#here it installs g++
+RUN apt-get -y install cmake
+#here it installs cmake
+#Docker caches the results of theese lines so they run only once,
+#unless explicitly told not to with --no-cache flag
+
+ARG SCRIPTS=/usr/bin
+COPY scripts/. ${SCRIPTS}
+#COPY creates a copy of files in root filesystem inside the image's
+RUN chmod a=rwx ${SCRIPTS}/entrypoint-script.sh
+RUN chmod a=rwx ${SCRIPTS}/cmd-script.sh
+#Change priviligies to make scripts executable
+
+#======================================================================
+#IMPORTANT NOTE 1:
+#   ENTRYPOINT and CMD use run-time environment, so they cannot access
+#   build-time variables created with ARG
+#IMPORTANT NOTE 2:
+#   ENTRYPOINT does not allow usage of environment variables while in
+#   exec form - only in shell. But shell form does not allow to pass
+#   CMD to ENTRYPOINT. So everything sucks, we cannot win anyways,
+#   hence there is no bad solutions. My solution is to manually rewrite
+#   ENTRYPOINT path to ${SCRIPTS} anytime I change it. Sucks...
+#======================================================================
+ENV REPO=${REPO} BINARIES=${BINARIES} SCRIPTS=${SCRIPTS}
+#ENV creates environment variables, visible in runtime
+ENTRYPOINT [ "/usr/bin/entrypoint-script.sh" ]
+#ENTRYPOINT executes given command upon each run of the container
+#entrypoint can be changed with --entrypoint command
+CMD [ "/usr/bin/cmd-script.sh" ]
+#CMD acts like an entrypoint if there is none. Otherwise it passes
+#given parameters as a parameters to ENTRYPOINT
