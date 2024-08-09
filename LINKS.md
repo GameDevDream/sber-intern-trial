@@ -14,6 +14,9 @@
 ## TensorRT
 
 # NVidia
+[CUDA WSL2 Main Page](https://developer.nvidia.com/cuda/wsl)\
+[CUDA WSL2 User Guide](https://docs.nvidia.com/cuda/wsl-user-guide/index.html)
+
 [CUDA Docker images](https://catalog.ngc.nvidia.com/orgs/nvidia/containers/cuda)\
 We're interested specifically in images with `ubuntu22.04` and `devel` in tags
 
