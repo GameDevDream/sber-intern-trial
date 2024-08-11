@@ -1,58 +1,84 @@
 # Build algorithm
-# Stage 1:
-#   Using the bare minimum, install git and download repositories.
-#   Come up with some way not to copy 10 gigs of repoes inside the
-#       container each time we build. Bind-mounts?
-# Stage 2:
-#   Use the Microsoft's code
-# Stage 3:
-#   Use the Microsoft's code
-#   Make sure that image contains only necessary apps
+# Stage 1 (installer):
+#   Using the bare minimum, install git
+#   Clone repositories
+# Stage 2 (builder):
+#   Copy ONNX Runtime inside cudnn image
+#   Build ONNX Runtime
+#   Copy ONNX Runtime inference sample inside
+#   Build squeezenet
+# Stage 3 (EXECUTIONER):
+#   Copy Build of ONNX Runtime inside cudnn image
+#   Copy Build of squeezenet inside
 #   ENTRYPOINT
 #   CMD
 
-FROM ubuntu:22.04 AS cloner
+ARG INSTALLATIONS=/usr/local/src
+ARG CACHE_MOUNTPOINT=/tmp/CACHE
+# ARG sets a build-time exclusive environment variable
+
+FROM ubuntu:22.04 AS installer
 # FROM chooses the base image used to build the new
-#ubuntu:22.04 IS the base image for cudann, so in future commits,
-#this should be removed
-LABEL Name=trial-assignment-sberbank Version=0.1.0
-#LABEL is metadata that can be accessed when using docker inspect
+ARG CACHE_MOUNTPOINT
+# In multi-stage builds it's necessery to redeclare global
+#environment variables. They keep global definition as default
 
 RUN rm -f /etc/apt/apt.conf.d/docker-clean && \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > \
         /etc/apt/apt.conf.d/keep-cache
-# Some ancient magic for caching apt-get. Found it in Docker reference.
+# /etc/apt/apt.conf.d/docker-clean is a script hooked to apt
+#that deletes .deb packages after installation has been finished.
+# Binary::apt::APT::Keep-Downloaded-Packages is apt internal boolean
+#variable that does the same when set to false. It is set to false
+#by default.
+# In order to cache apt-get properly, both those obstacles should be
+#removed.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && \
-    apt-get --no-install-recommends install -y git g++ cmake && \
+    apt-get --no-install-recommends install -y git ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 # RUN is a directive to builder. It executes provided command
 #inside the build-time container. In this case, it updates
 #apt package manager, than uses it to quietly (-y) install
-#minimalistic (-no-install-recommends) versions of git g++ and cmake.
-#finally it cleans up something in .../lists folder that is of no
-#use for our purposes.
-# Probably worth removing g++ from here, since CUDA comes with
-#built-in compiler.
-# Probably worth moving apt-get install cmake to the bottom, since it
-#will be lost after the next build stages.
+#minimalistic (-no-install-recommends) versions of git and ca-certificates.
+#finally it cleans up .../lists folder that only contains
+#information on packages that COULD be installed. It is recreated 
+#after each execution of apt-get update, regardless of existence of
+#those lists.
+# --mount flag mounts data inside an intermediate container (aka layer)
+#that is used to execute RUN commands. type=cache indicates the nature of
+#mounted data: it is a cache that is kept inside Docker Host and managed
+#by docker. 
 
-COPY repo/test/hello-world.cpp /usr/src
-# THIS LINE SHOULD BE REMOVED IN THE FINAL VERSION!
-#Along with repo/test.
+RUN --mount=type=bind,source=scripts/install-script.sh,target=/usr/local/bin/install-script.sh \
+    --mount=type=cache,id=ONNXrt_installation,target=${CACHE_MOUNTPOINT}/ONNXrt_installation \
+    install-script.sh ${CACHE_MOUNTPOINT}/ONNXrt_installation \
+                      ONNXRuntime \
+                      https://github.com/microsoft/onnxruntime.git
+# Bind-mounting file is generally faster than COPY and, since unmounting
+#happens as soon, as RUN finished execution, it does not bloat image
+# Cache mounting does not bloat image either and is the only way I found
+#to mount host directory with write privilegies during build-time
+# Providing an ID does not help in finding cache-mounts inside Docker.
+#the folder that is mounted is considered anonymous. However, providing
+#an ID does make mounting more explicit and guarantees reuse of a mounted
+#directory regardless of a target.
+LABEL Name=trial-assignment-sberbank_installer Version=1.0.0
 
+FROM ubuntu:22.04 AS tester
+ARG INSTALLATIONS
+ARG CACHE_MOUNTPOINT
+RUN --mount=type=cache,id=ONNXrt_installation,target=${CACHE_MOUNTPOINT}/ONNXrt_installation \
+    cp -r ${CACHE_MOUNTPOINT}/ONNXrt_installation/ONNXRuntime ${INSTALLATIONS}/
+# Copy from cache mount into container's file system. This operation copies
+#only the installation (not checksums) to keep the image as small as possible.
+# Unfortunately this result cannot be achieved with COPY since it does not
+#allow copying from mounts.
 
-ENV SCRIPTS=/usr/bin
-# ENV creates environment variables, visible both build- and run-time
-COPY scripts/entrypoint-script.sh scripts/cmd-script.sh ${SCRIPTS}
-# COPY creates a copy of files in root filesystem inside the image's
-RUN chmod a+rwx ${SCRIPTS}/entrypoint-script.sh ${SCRIPTS}/cmd-script.sh
-# Change priviligies to make scripts executable
-
-ENTRYPOINT [ "/usr/bin/entrypoint-script.sh" ]
-# ENTRYPOINT executes given command upon each run of the container
-#entrypoint can be changed with --entrypoint command
-CMD [ "/usr/bin/cmd-script.sh" ]
+CMD ["usr/bin/bash"]
 # CMD acts like an entrypoint if there is none. Otherwise it passes
 #given parameters as a parameters to ENTRYPOINT
+
+LABEL Name=trial-assignment-sberbank_tester Version=1.0.0
+#LABEL is metadata that can be accessed when using docker inspect
