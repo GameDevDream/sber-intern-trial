@@ -1,6 +1,6 @@
 #!/bin/bash
 
-dir=$1 name=$2 http=$3
+dir=$1 name=$2 http=$3 tag=$4
 
 # install / reinstall if corrupted:
 #   if there is no checksum directory
@@ -20,7 +20,7 @@ then
 # install
     echo "clone-script.sh: cloning $http to $dir/$name"
     git clone --depth 1 \
-               -b v1.18.1 \
+               -b $tag \
                $http \
                $dir/$name
     echo "clone-script.sh: cleanup"
