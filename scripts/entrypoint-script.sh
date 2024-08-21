@@ -3,16 +3,10 @@
 echo "
 ===============================================================================
 ENTRYPOINT: entrypoint-script.sh
-Check versions of git, g++ and cmake...
+Listing contents of WORKDIR
 "
-
-git --version
-g++ --version
-cmake --version
-
+ls -al
 echo "
-If any of applications did not report it's version,
-Then something went wrong!
 ===============================================================================
 "
 
